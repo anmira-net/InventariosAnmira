@@ -10,10 +10,10 @@ import pymysql.cursors
 #    "port": 3306,
 #}
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",  # Usuario por defecto
-    "password": "",  # Contraseña vacía por defecto en XAMPP
-    "database": "inventariosanmira",
+    "host": "svgr348.serverneubox.com.mx",
+    "user": "anmirane_admin",  # Usuario por defecto
+    "password": "AndreaMiaAnmira",  # Contraseña vacía por defecto en XAMPP
+    "database": "anmirane_inventariosanmira",
     "port": 3306,
     "cursorclass": pymysql.cursors.DictCursor,
 }

@@ -1,0 +1,118 @@
+
+CREATE DATABASE IF NOT EXISTS `inventariosanmira` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+
+
+-- 1. ROLES
+CREATE TABLE `roles` (
+  `rol_id` int(11) NOT NULL AUTO_INCREMENT,
+  `nombre` varchar(30) NOT NULL,
+  `descripcion` varchar(150) DEFAULT NULL,
+  `creado_en` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`rol_id`),
+  UNIQUE KEY `uk_roles_nombre` (`nombre`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 2. USUARIOS
+CREATE TABLE `usuarios` (
+  `usuario_id` int(11) NOT NULL AUTO_INCREMENT,
+  `rol_id` int(11) NOT NULL,
+  `nombre_completo` varchar(100) NOT NULL,
+  `usuario` varchar(50) NOT NULL,
+  `password_hash` varchar(255) NOT NULL,
+  `correo` varchar(100) DEFAULT NULL,
+  `activo` tinyint(1) NOT NULL DEFAULT 1,
+  `ultimo_login` datetime DEFAULT NULL,
+  `creado_en` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `actualizado_en` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`usuario_id`),
+  UNIQUE KEY `uk_usuarios_usuario` (`usuario`),
+  KEY `idx_usuarios_rol` (`rol_id`),
+  CONSTRAINT `fk_usuarios_rol` FOREIGN KEY (`rol_id`) REFERENCES `roles` (`rol_id`) ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 3. BITÁCORA DE ACCESOS
+CREATE TABLE `bitacora_accesos` (
+  `log_id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `usuario_id` int(11) NOT NULL,
+  `ip_origen` varchar(45) DEFAULT NULL,
+  `exitoso` tinyint(1) NOT NULL,
+  `detalles` varchar(255) DEFAULT NULL,
+  `fecha_hora` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`log_id`),
+  KEY `idx_bitacora_usuario` (`usuario_id`),
+  CONSTRAINT `fk_bitacora_usuario` FOREIGN KEY (`usuario_id`) REFERENCES `usuarios` (`usuario_id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 4. CATÁLOGO LOCAL (Sincronizado desde Microsip)
+CREATE TABLE `catalogo_local` (
+  `articulo_id_microsip` int(11) NOT NULL,
+  `codigo_barras` varchar(50) NOT NULL,
+  `descripcion` varchar(255) NOT NULL,
+  `almacen_id` int(11) NOT NULL,
+  `existencia_microsip` decimal(12,4) NOT NULL DEFAULT 0.0000,
+  `costo` decimal(12,4) NOT NULL DEFAULT 0.0000,
+  `ultima_fecha_compra` date DEFAULT NULL,
+  `ultima_sincronizacion` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`articulo_id_microsip`, `codigo_barras`, `almacen_id`),
+  KEY `idx_catalogo_codigo_barras` (`codigo_barras`),
+  KEY `idx_catalogo_almacen` (`almacen_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 5. SESIONES DE INVENTARIO
+CREATE TABLE `sesiones_inventario` (
+  `sesion_id` int(11) NOT NULL AUTO_INCREMENT,
+  `almacen_id_microsip` int(11) NOT NULL,
+  `nombre_almacen` varchar(100) NOT NULL,
+  `descripcion` varchar(200) DEFAULT NULL,
+  `estado` enum('Borrador','En Proceso','Cerrado','Aplicado') NOT NULL DEFAULT 'En Proceso',
+  `creado_por` int(11) NOT NULL,
+  `creado_en` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `cerrado_en` datetime DEFAULT NULL,
+  PRIMARY KEY (`sesion_id`),
+  KEY `idx_sesiones_creado_por` (`creado_por`),
+  CONSTRAINT `fk_sesiones_usuario` FOREIGN KEY (`creado_por`) REFERENCES `usuarios` (`usuario_id`) ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 6. ZONAS DE INVENTARIO
+CREATE TABLE `zonas_inventario` (
+  `zona_id` int(11) NOT NULL AUTO_INCREMENT,
+  `sesion_id` int(11) NOT NULL,
+  `codigo_zona` varchar(50) NOT NULL,
+  `nombre_zona` varchar(150) DEFAULT NULL,
+  `usuario_asignado_id` int(11) DEFAULT NULL,
+  `estado` enum('PENDIENTE','EN_PROCESO','COMPLETADO','CANCELADO') NOT NULL DEFAULT 'PENDIENTE',
+  `fecha_creacion` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`zona_id`),
+  UNIQUE KEY `uk_sesion_codigo_zona` (`sesion_id`, `codigo_zona`),
+  KEY `idx_zonas_sesion` (`sesion_id`),
+  KEY `idx_zonas_usuario` (`usuario_asignado_id`),
+  CONSTRAINT `fk_zonas_sesion` FOREIGN KEY (`sesion_id`) REFERENCES `sesiones_inventario` (`sesion_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_zonas_usuario` FOREIGN KEY (`usuario_asignado_id`) REFERENCES `usuarios` (`usuario_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 7. LECTURAS / CAPTURAS DE INVENTARIO
+CREATE TABLE `lecturas_inventario` (
+  `lectura_id` int(11) NOT NULL AUTO_INCREMENT,
+  `sesion_id` int(11) NOT NULL,
+  `zona_id` int(11) NOT NULL,
+  `articulo_id` int(11) DEFAULT NULL,
+  `clave_articulo` varchar(100) DEFAULT NULL,
+  `descripcion` text DEFAULT NULL,
+  `cantidad` decimal(12,4) NOT NULL DEFAULT 1.0000,
+  `usuario_id` int(11) DEFAULT NULL,
+  `fecha_captura` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`lectura_id`),
+  KEY `idx_lecturas_sesion` (`sesion_id`),
+  KEY `idx_lecturas_zona` (`zona_id`),
+  KEY `idx_lecturas_usuario` (`usuario_id`),
+  KEY `idx_lecturas_clave` (`clave_articulo`),
+  CONSTRAINT `fk_lecturas_sesion` FOREIGN KEY (`sesion_id`) REFERENCES `sesiones_inventario` (`sesion_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_lecturas_zona` FOREIGN KEY (`zona_id`) REFERENCES `zonas_inventario` (`zona_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_lecturas_usuario` FOREIGN KEY (`usuario_id`) REFERENCES `usuarios` (`usuario_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+
+
+$2b$12$E8q8kHw.c1F9lJd3K8eZ/.vQZ8U.pU9y5n0g4N7M5kQ2jL1w9O2eS
+
+
