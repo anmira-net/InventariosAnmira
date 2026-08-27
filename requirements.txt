@@ -1,7 +1,6 @@
 streamlit
 pandas
 matplotlib
-zipfile
 xml.etree.ElementTree
 io
 bcrypt
