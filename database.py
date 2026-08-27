@@ -3,7 +3,7 @@ import pymysql.cursors
 
 # Ajusta credenciales de Neubox / cPanel
 DB_CONFIG = {
-    "host": "svgr348.serverneubox.com.mx",
+    "host": "anmira.net",
     "user": "admin",  # Usuario por defecto
     "password": "AnmiraAndreaMia13",  # Contraseña vacía por defecto en XAMPP
     "database": "inventariosanmira",
