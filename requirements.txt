@@ -1,7 +1,6 @@
 streamlit
 pandas
 matplotlib
-io
 bcrypt
 pymysql
 openpyxl
