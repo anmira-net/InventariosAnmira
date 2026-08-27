@@ -8,6 +8,8 @@ DB_CONFIG = {
     "password": "AndreaMiaAnmira",  # Contraseña vacía por defecto en XAMPP
     "database": "anmirane_inventariosanmira",
     "port": 3306,
+    "charset": "utf8mb4",
+    "connect_timeout": 10,
     "cursorclass": pymysql.cursors.DictCursor,
 }
 
