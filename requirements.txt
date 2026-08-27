@@ -1,9 +1,8 @@
 streamlit
 pandas
 matplotlib
-xml.etree.ElementTree
 io
 bcrypt
 pymysql
 openpyxl
-sys
+
