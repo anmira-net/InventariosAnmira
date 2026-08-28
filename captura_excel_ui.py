@@ -2,12 +2,7 @@ import streamlit as st
 import pandas as pd
 from database import get_db_connection
 
-# ==========================================
-# FUNCIONES AUXILIARES DE SESIONES Y ZONAS
-# ==========================================
-
-def obtener_sesiones_activas():
-    """Obtiene las sesiones de inventario en estado activo u abierto."""
+def obtener_sesiones_activas(empresa_id: int):
     conn = get_db_connection()
     if not conn:
         return []
@@ -16,26 +11,19 @@ def obtener_sesiones_activas():
             sql = """
                 SELECT sesion_id, almacen_id, estado, observaciones 
                 FROM sesiones_inventario 
-                WHERE UPPER(estado) IN ('ABIERTA', 'EN_PROCESO', 'ACTIVA')
-                   OR estado IS NULL 
-                   OR TRIM(estado) = ''
+                WHERE empresa_id = %s 
+                  AND (UPPER(estado) IN ('ABIERTA', 'EN_PROCESO', 'ACTIVA') OR estado IS NULL OR TRIM(estado) = '')
                 ORDER BY sesion_id DESC;
             """
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            for r in rows:
-                if "almacen_id" not in r or not r["almacen_id"]:
-                    r["almacen_id"] = 1
-            return rows
+            cursor.execute(sql, (empresa_id,))
+            return cursor.fetchall()
     except Exception as e:
         st.error(f"Error al cargar sesiones: {e}")
         return []
     finally:
         conn.close()
 
-
-def obtener_zonas_por_sesion(sesion_id):
-    """Obtiene las zonas asociadas a una sesión dada."""
+def obtener_zonas_por_sesion(sesion_id: int):
     conn = get_db_connection()
     if not conn:
         return []
@@ -50,34 +38,28 @@ def obtener_zonas_por_sesion(sesion_id):
     finally:
         conn.close()
 
-        
-
-
-def obtener_matriz_conteo(sesion_id, zona_id):
-    """
-    Obtiene todos los artículos del catálogo local y cruza las lecturas
-    ya registradas en la zona para mostrarlas como una lista de captura.
-    """
+def obtener_matriz_conteo(sesion_id: int, zona_id: int, empresa_id: int):
     conn = get_db_connection()
     if not conn:
         return []
     try:
         with conn.cursor() as cursor:
-            # Selecciona el catálogo y hace JOIN con los conteos guardados previamente en esta zona
             sql = """
                 SELECT 
                     c.codigo_barras,
                     c.descripcion,
+                    COALESCE(c.linea, 'GENERAL') AS linea,
                     COALESCE(SUM(l.cantidad), 0.00) AS cantidad_contada
                 FROM catalogo_local c
                 LEFT JOIN lecturas_inventario l 
                        ON c.codigo_barras = l.codigo_barras 
                       AND l.zona_id = %s 
                       AND l.sesion_id = %s
-                GROUP BY c.codigo_barras, c.descripcion
-                ORDER BY c.descripcion ASC;
+                WHERE c.empresa_id = %s
+                GROUP BY c.codigo_barras, c.descripcion, c.linea
+                ORDER BY c.linea ASC, c.descripcion ASC;
             """
-            cursor.execute(sql, (zona_id, sesion_id))
+            cursor.execute(sql, (zona_id, sesion_id, empresa_id))
             return cursor.fetchall()
     except Exception as e:
         st.error(f"Error al cargar matriz de conteo: {e}")
@@ -85,20 +67,15 @@ def obtener_matriz_conteo(sesion_id, zona_id):
     finally:
         conn.close()
 
-def guardar_conteo_masivo(sesion_id, zona_id, df_modificado, usuario_id):
-    """
-    Actualiza/reemplaza los conteos de la zona con los valores ingresados en la tabla Excel.
-    """
+def guardar_conteo_masivo(sesion_id: int, zona_id: int, df_modificado, usuario_id: int):
     conn = get_db_connection()
     if not conn:
         return False
     try:
         with conn.cursor() as cursor:
-            # 1. Limpiar registros previos de esta zona para reinsertar el estado actual del Excel
             sql_clean = "DELETE FROM lecturas_inventario WHERE sesion_id = %s AND zona_id = %s;"
             cursor.execute(sql_clean, (sesion_id, zona_id))
 
-            # 2. Insertar solo los productos que tengan una cantidad mayor a 0
             df_a_guardar = df_modificado[df_modificado["cantidad_contada"] > 0]
 
             if not df_a_guardar.empty:
@@ -128,18 +105,16 @@ def guardar_conteo_masivo(sesion_id, zona_id, df_modificado, usuario_id):
     finally:
         conn.close()
 
-
-# ==========================================
-# INTERFAZ TIPO HOJA DE CÁLCULO
-# ==========================================
-
 def render_modulo_captura_excel():
+    user_info = st.session_state.get("user_info", {})
+    empresa_id = user_info.get("empresa_id")
+    user_id = user_info.get("id", 1)
+
     st.title("📑 Captura de Inventario (Hoja estilo Excel)")
 
-    # 1. SELECCIÓN DE AUDITORÍA Y ZONA
-    sesiones = obtener_sesiones_activas() # Usa tu función existente
+    sesiones = obtener_sesiones_activas(empresa_id)
     if not sesiones:
-        st.warning("⚠️ No hay auditorías ABIERTAS. Crea o abre una sesión primero.")
+        st.warning("⚠️ No hay auditorías ABIERTAS registradas para tu empresa.")
         return
 
     col_s, col_z = st.columns(2)
@@ -148,9 +123,9 @@ def render_modulo_captura_excel():
         sesion_sel = st.selectbox("1. Auditoría Activa:", list(mapa_s.keys()))
         sesion_id = mapa_s[sesion_sel]
 
-    zonas = obtener_zonas_por_sesion(sesion_id) # Usa tu función existente
+    zonas = obtener_zonas_por_sesion(sesion_id)
     if not zonas:
-        st.warning(f"⚠️ La sesión #{sesion_id} no tiene zonas. Crea pasillos/estantes primero.")
+        st.warning(f"⚠️ La sesión #{sesion_id} no tiene zonas asociadas.")
         return
 
     with col_z:
@@ -160,33 +135,29 @@ def render_modulo_captura_excel():
 
     st.markdown("---")
 
-    user_info = st.session_state.get("user_info", {})
-    user_id = user_info.get("usuario_id", 1)
-
-    # 2. CARGA Y FILTRADO DE DATOS
-    datos = obtener_matriz_conteo(sesion_id, zona_id)
+    datos = obtener_matriz_conteo(sesion_id, zona_id, empresa_id)
     if not datos:
-        st.info("No hay productos cargados en el catálogo local.")
+        st.info("No hay productos en el catálogo de tu empresa.")
         return
 
     df_original = pd.DataFrame(datos)
     df_original["cantidad_contada"] = df_original["cantidad_contada"].astype(float)
 
-    # BUSCADOR Y FILTROS TIPO EXCEL
-    st.subheader("🔍 Filtros de Búsqueda Rapida")
-    col_busq, col_solo_contados = st.columns([3, 1])
+    st.subheader("🔍 Filtros de Búsqueda Rápida")
+    col_busq, col_linea, col_solo_contados = st.columns([2, 1.5, 1])
     
     with col_busq:
-        filtro_texto = st.text_input(
-            "Filtrar por Clave / Código de Barras o Descripción del Artículo:", 
-            placeholder="Escriba algo para filtrar la lista..."
-        )
+        filtro_texto = st.text_input("Filtrar por Clave o Descripción:", placeholder="Escriba texto para filtrar...")
+        
+    with col_linea:
+        lineas_unicas = ["TODAS LAS LÍNEAS"] + sorted(list(df_original["linea"].dropna().unique()))
+        linea_sel = st.selectbox("Filtrar por Línea:", lineas_unicas)
+
     with col_solo_contados:
         st.write("")
         st.write("")
-        solo_contados = st.checkbox("Ver solo lo ya contado (> 0)")
+        solo_contados = st.checkbox("Ver solo contados (> 0)")
 
-    # Aplicar filtros al DataFrame
     df_filtrado = df_original.copy()
     
     if filtro_texto.strip():
@@ -196,28 +167,27 @@ def render_modulo_captura_excel():
             df_filtrado["descripcion"].str.lower().str.contains(term, na=False)
         ]
 
+    if linea_sel != "TODAS LAS LÍNEAS":
+        df_filtrado = df_filtrado[df_filtrado["linea"] == linea_sel]
+
     if solo_contados:
         df_filtrado = df_filtrado[df_filtrado["cantidad_contada"] > 0]
 
-    # 3. HOJA DE CÁLCULO EDITABLE (st.data_editor)
     st.markdown("### ✏️ Hoja de Captura")
-    st.caption("Solo la columna **Cantidad Contada** es editable. Puedes navegar con las flechas del teclado o la tecla ENTER.")
-
-    # Guardar cambios editados directamente en la vista
     df_edited = st.data_editor(
         df_filtrado,
         column_config={
             "codigo_barras": st.column_config.TextColumn("Código / Clave", disabled=True),
             "descripcion": st.column_config.TextColumn("Descripción del Producto", disabled=True),
+            "linea": st.column_config.TextColumn("Línea / Categoría", disabled=True),
             "cantidad_contada": st.column_config.NumberColumn(
                 "Cantidad Contada",
-                help="Ingresa el valor total contado",
                 min_value=0.0,
                 step=1.0,
                 format="%.2f"
             )
         },
-        disabled=["codigo_barras", "descripcion"],
+        disabled=["codigo_barras", "descripcion", "linea"],
         hide_index=True,
         use_container_width=True,
         key=f"editor_grid_{sesion_id}_{zona_id}"
@@ -225,11 +195,9 @@ def render_modulo_captura_excel():
 
     st.markdown("---")
 
-    # 4. BOTÓN DE GUARDADO MASIVO
     c_save, c_info = st.columns([1, 2])
     with c_save:
         if st.button("💾 Guardar Cambios de la Zona", type="primary", use_container_width=True):
-            # Combinar las ediciones con el DataFrame global si se aplicaron filtros
             df_original.set_index("codigo_barras", inplace=True)
             df_edited_idx = df_edited.set_index("codigo_barras")
             
