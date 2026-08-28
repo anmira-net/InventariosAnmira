@@ -129,7 +129,7 @@ def procesar_excel_microsip(uploaded_file, nombre_almacen_seleccionado):
                         "descripcion": descripcion,
                         "almacen_id": almacen_id_seleccionado,
                         "nombre_almacen": nombre_almacen_seleccionado,
-                        "existencia_microsip": existencia,
+                        "existencia": existencia,
                         "costo": costo
                     })
 
@@ -149,12 +149,12 @@ def guardar_en_db(df):
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO catalogo_local 
-                    (articulo_id_microsip, codigo_barras, descripcion, almacen_id, existencia_microsip, costo)
+                    (articulo_id_microsip, codigo_barras, descripcion, almacen_id, existencia, costo)
                 VALUES 
                     (%s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     descripcion = VALUES(descripcion),
-                    existencia_microsip = VALUES(existencia_microsip),
+                    existencia = VALUES(existencia_microsip),
                     costo = VALUES(costo),
                     ultima_sincronizacion = CURRENT_TIMESTAMP;
             """
@@ -165,7 +165,7 @@ def guardar_en_db(df):
                     str(row['codigo_barras']),
                     str(row['descripcion']),
                     int(row['almacen_id']),
-                    float(row['existencia_microsip']),
+                    float(row['existencia']),
                     float(row['costo'])
                 )
                 for _, row in df.iterrows()
