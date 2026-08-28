@@ -154,7 +154,7 @@ def guardar_en_db(df):
                     (%s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     descripcion = VALUES(descripcion),
-                    existencia = VALUES(existencia_microsip),
+                    existencia = VALUES(existencia),
                     costo = VALUES(costo),
                     ultima_sincronizacion = CURRENT_TIMESTAMP;
             """
