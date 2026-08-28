@@ -305,8 +305,8 @@ def render_importador_inventario():
                 c1.metric("Filas Seleccionadas", f"{len(df_a_guardar):,} de {len(df_edited):,}")
                 
                 if not df_a_guardar.empty:
-                    unidades = df_a_guardar['existencia_microsip'].sum()
-                    costo_total = (df_a_guardar['existencia_microsip'] * df_a_guardar['costo']).sum()
+                    unidades = df_a_guardar['existencia'].sum()
+                    costo_total = (df_a_guardar['existencia'] * df_a_guardar['costo']).sum()
                     c2.metric("Unidades a Importar", f"{unidades:,.2f}")
                     c3.metric("Valor Total Seleccionado", f"${costo_total:,.2f}")
                     
