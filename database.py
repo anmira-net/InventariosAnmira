@@ -4,14 +4,15 @@ import pymysql.cursors
 # Ajusta credenciales de Neubox / cPanel
 DB_CONFIG = {
     "host": "svgr348.serverneubox.com.mx",
-    "user": "anmirane_admin",  # Usuario por defecto
-    "password": "AndreaMiaAnmira",  # Contraseña vacía por defecto en XAMPP
+    "user": "anmirane_admin",
+    "password": "AndreaMia2026+-",
     "database": "anmirane_inventariosanmira",
     "port": 3306,
     "charset": "utf8mb4",
     "connect_timeout": 10,
     "cursorclass": pymysql.cursors.DictCursor,
 }
+
 
 def get_db_connection():
     """Retorna una conexión activa a la base de datos."""
