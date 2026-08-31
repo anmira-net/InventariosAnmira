@@ -2,50 +2,46 @@ import openpyxl
 import streamlit as st
 from database import get_db_connection
 
-# Mapeo unificado de almacenes (igual al módulo de importación)
-almacenes_map = {
-    "INDEPENDENCIA": 1,
-    "DIAGONAL": 2,
-    "PINTUMEX": 3
-}
-
-# Diccionario inverso para obtener el nombre a partir del ID
-id_a_almacen_map = {v: k for k, v in almacenes_map.items()}
-
 # ==========================================
-# CONSULTAS AUXILIARES Y OBTENCIÓN DE DATOS
+# CONSULTAS DE ALMACENES AUTORIZADOS
 # ==========================================
 
-def obtener_almacenes_disponibles():
-    """
-    Obtiene los almacenes que tienen datos importados en catalogo_local.
-    Si la tabla está vacía, retorna todas las opciones por defecto de almacenes_map.
-    """
+def obtener_almacenes_permitidos():
+    """Obtiene únicamente los almacenes permitidos para el usuario logueado en la sesión."""
+    user_info = st.session_state.get("user_info")
+    if not user_info or "usuario_id" not in user_info:
+        st.error("No se encontró la información del usuario en sesión.")
+        return {}
+
+    usuario_id = user_info["usuario_id"]
     conn = get_db_connection()
     if not conn:
-        return almacenes_map
-        
+        return {}
+
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT DISTINCT almacen_id FROM catalogo_local WHERE almacen_id IS NOT NULL ORDER BY almacen_id ASC;"
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            
-            if not rows:
-                return almacenes_map
+            # Si es Admin ve todos los almacenes; si no, solo sus asignados
+            if user_info.get("rol") in ["Admin", "Administrador"]:
+                sql = "SELECT almacen_id, nombre_almacen FROM almacenes ORDER BY nombre_almacen ASC"
+                cursor.execute(sql)
+            else:
+                sql = """
+                    SELECT a.almacen_id, a.nombre_almacen 
+                    FROM almacenes a
+                    INNER JOIN usuario_almacenes ua ON a.almacen_id = ua.almacen_id
+                    WHERE ua.usuario_id = %s
+                    ORDER BY a.nombre_almacen ASC
+                """
+                cursor.execute(sql, (usuario_id,))
 
-            almacenes = {}
-            for r in rows:
-                alm_id = r["almacen_id"]
-                # Usa el nombre según el mapeo centralizado
-                nombre = id_a_almacen_map.get(alm_id, f"Almacén #{alm_id}")
-                almacenes[nombre] = alm_id
-            return almacenes
+            res = cursor.fetchall()
+            return {r["nombre_almacen"]: r["almacen_id"] for r in res}
     except Exception as e:
-        st.error(f"Error al obtener almacenes: {e}")
-        return almacenes_map
+        st.error(f"Error al obtener almacenes permitidos: {e}")
+        return {}
     finally:
         conn.close()
+
 
 def obtener_usuarios_activos():
     """Obtiene la lista de usuarios activos para asignar como auditores."""
@@ -74,14 +70,14 @@ def obtener_id_usuario_valido(user_id):
         return None
     try:
         with conn.cursor() as cursor:
-            # Checar si el ID enviado existe
+            # 1. Verificar si el ID enviado desde la sesión existe en MySQL
             cursor.execute("SELECT usuario_id FROM usuarios WHERE usuario_id = %s;", (user_id,))
             res = cursor.fetchone()
             if res:
                 return res["usuario_id"]
             
-            # Si no existe, tomar el primer usuario activo de la BD
-            cursor.execute("SELECT usuario_id FROM usuarios WHERE activo = 1 LIMIT 1;")
+            # 2. Si no existe, tomar el primer usuario registrado/activo para evitar el error 1452
+            cursor.execute("SELECT usuario_id FROM usuarios LIMIT 1;")
             first_user = cursor.fetchone()
             if first_user:
                 return first_user["usuario_id"]
@@ -92,34 +88,26 @@ def obtener_id_usuario_valido(user_id):
     finally:
         conn.close()
 
+
 def crear_sesion(almacen_id, observaciones, usuario_creador_id):
-    """Crea una sesión mapeando correctamente los nombres de columna reales."""
+    """Crea una nueva sesión usando la columna 'creado_por' y un usuario válido."""
     conn = get_db_connection()
     if not conn:
         return False
-    
-    # Garantizar que el ID del usuario existe en la tabla usuarios
+
+    # Validar que el usuario exista en la tabla usuarios para no romper la FK
     user_id_valido = obtener_id_usuario_valido(usuario_creador_id)
     if not user_id_valido:
-        st.error("No se encontró ningún usuario válido en la base de datos para registrar la sesión.")
+        st.error("No se encontró ningún usuario registrado en la base de datos para asociar la sesión.")
         return False
 
     try:
         with conn.cursor() as cursor:
-            try:
-                # Intento con las columnas identificadas (creado_por y almacen_id)
-                sql = """
-                    INSERT INTO sesiones_inventario (almacen_id, estado, observaciones, creado_por)
-                    VALUES (%s, 'ABIERTA', %s, %s);
-                """
-                cursor.execute(sql, (almacen_id, observaciones, user_id_valido))
-            except Exception:
-                # Fallback por si la columna almacen_id u observaciones tienen otro nombre
-                sql = """
-                    INSERT INTO sesiones_inventario (estado, creado_por)
-                    VALUES ('ABIERTA', %s);
-                """
-                cursor.execute(sql, (user_id_valido,))
+            sql = """
+                INSERT INTO sesiones_inventario (almacen_id, estado, observaciones, creado_por)
+                VALUES (%s, 'ABIERTA', %s, %s);
+            """
+            cursor.execute(sql, (almacen_id, observaciones, user_id_valido))
         conn.commit()
         return True
     except Exception as e:
@@ -129,20 +117,27 @@ def crear_sesion(almacen_id, observaciones, usuario_creador_id):
         conn.close()
 
         
-def obtener_sesiones():
-    """Recupera todas las sesiones de inventario."""
+def obtener_sesiones_permitidas(almacenes_ids):
+    """Recupera únicamente las sesiones pertenecientes a los almacenes permitidos."""
+    if not almacenes_ids:
+        return []
+        
     conn = get_db_connection()
     if not conn:
         return []
     try:
+        format_strings = ','.join(['%s'] * len(almacenes_ids))
         with conn.cursor() as cursor:
-            sql = """
-                SELECT s.sesion_id, s.almacen_id, s.fecha_inicio, s.fecha_cierre, s.estado, s.observaciones, u.nombre_completo AS creador
+            sql = f"""
+                SELECT s.sesion_id, s.almacen_id, a.nombre_almacen, s.fecha_inicio, s.fecha_cierre, 
+                       s.estado, s.observaciones, u.nombre_completo AS creador
                 FROM sesiones_inventario s
+                INNER JOIN almacenes a ON s.almacen_id = a.almacen_id
                 LEFT JOIN usuarios u ON s.usuario_creador_id = u.usuario_id
+                WHERE s.almacen_id IN ({format_strings})
                 ORDER BY s.sesion_id DESC;
             """
-            cursor.execute(sql)
+            cursor.execute(sql, list(almacenes_ids))
             return cursor.fetchall()
     except Exception as e:
         st.error(f"Error al obtener sesiones: {e}")
@@ -150,8 +145,9 @@ def obtener_sesiones():
     finally:
         conn.close()
 
+
 def actualizar_sesion(sesion_id, observaciones, estado):
-    """Actualiza observaciones y el estado de una sesión."""
+    """Actualiza observaciones y estado de una sesión."""
     conn = get_db_connection()
     if not conn:
         return False
@@ -170,15 +166,19 @@ def actualizar_sesion(sesion_id, observaciones, estado):
     finally:
         conn.close()
 
+
 def eliminar_sesion(sesion_id):
-    """Elimina la sesión y sus zonas asociadas."""
+    """Elimina la sesión, sus zonas y conteos asociados."""
     conn = get_db_connection()
     if not conn:
         return False
     try:
         with conn.cursor() as cursor:
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
+            cursor.execute("DELETE c FROM lecturas_inventario c INNER JOIN zonas_inventario z ON c.zona_id = z.zona_id WHERE z.sesion_id = %s;", (sesion_id,))
             cursor.execute("DELETE FROM zonas_inventario WHERE sesion_id = %s;", (sesion_id,))
             cursor.execute("DELETE FROM sesiones_inventario WHERE sesion_id = %s;", (sesion_id,))
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
         conn.commit()
         return True
     except Exception as e:
@@ -192,7 +192,7 @@ def eliminar_sesion(sesion_id):
 # ==========================================
 
 def crear_zona(sesion_id, codigo_zona, nombre_zona, usuario_asignado_id):
-    """Crea una zona individual asociada a una sesión."""
+    """Crea una zona asociada a la sesión de inventario."""
     conn = get_db_connection()
     if not conn:
         return False
@@ -211,8 +211,9 @@ def crear_zona(sesion_id, codigo_zona, nombre_zona, usuario_asignado_id):
     finally:
         conn.close()
 
+
 def obtener_zonas_por_sesion(sesion_id):
-    """Recupera las zonas de una sesión con el nombre del auditor asignado."""
+    """Recupera las zonas de una sesión con el auditor asignado."""
     conn = get_db_connection()
     if not conn:
         return []
@@ -233,8 +234,9 @@ def obtener_zonas_por_sesion(sesion_id):
     finally:
         conn.close()
 
+
 def actualizar_zona(zona_id, codigo_zona, nombre_zona, usuario_asignado_id, estado):
-    """Actualiza los datos de una zona de inventario."""
+    """Actualiza la información de una zona."""
     conn = get_db_connection()
     if not conn:
         return False
@@ -254,6 +256,7 @@ def actualizar_zona(zona_id, codigo_zona, nombre_zona, usuario_asignado_id, esta
     finally:
         conn.close()
 
+
 def eliminar_zona(zona_id):
     """Elimina una zona específica."""
     conn = get_db_connection()
@@ -270,8 +273,9 @@ def eliminar_zona(zona_id):
     finally:
         conn.close()
 
+
 def importar_zonas_desde_excel(file_buffer, sesion_id):
-    """Extrae las zonas de un archivo Excel y las registra en batch."""
+    """Importa zonas masivamente desde Excel."""
     try:
         wb = openpyxl.load_workbook(file_buffer, data_only=True)
         sheet = wb.active
@@ -326,6 +330,13 @@ def importar_zonas_desde_excel(file_buffer, sesion_id):
 def render_modulo_sesiones_zonas():
     st.title("📍 Gestión de Sesiones y Zonas de Inventario")
 
+    dict_almacenes = obtener_almacenes_permitidos()
+    if not dict_almacenes:
+        st.warning("⚠️ No tienes almacenes permitidos asignados.")
+        return
+
+    almacenes_ids = list(dict_almacenes.values())
+
     tab1, tab2 = st.tabs(["📋 Auditorías / Sesiones", "🗺️ Asignación de Zonas"])
 
     # ----------------------------------------------------
@@ -336,14 +347,13 @@ def render_modulo_sesiones_zonas():
 
         with col_crear:
             st.subheader("➕ Nueva Auditoría")
-            almacenes_disponibles = obtener_almacenes_disponibles()
 
             with st.form("form_nueva_sesion", clear_on_submit=True):
                 nombre_almacen_sel = st.selectbox(
                     "Selecciona el Almacén a Auditar:",
-                    options=list(almacenes_disponibles.keys())
+                    options=list(dict_almacenes.keys())
                 )
-                almacen_id = almacenes_disponibles[nombre_almacen_sel]
+                almacen_id = dict_almacenes[nombre_almacen_sel]
 
                 observaciones = st.text_area(
                     "Notas / Observaciones:",
@@ -356,20 +366,19 @@ def render_modulo_sesiones_zonas():
                     user_id = user_info.get("usuario_id", 1)
 
                     if crear_sesion(almacen_id, observaciones, user_id):
-                        st.success(f"¡Auditoría abierta para {nombre_almacen_sel} (ID: {almacen_id})!")
+                        st.success(f"¡Auditoría abierta para {nombre_almacen_sel}!")
                         st.rerun()
 
         with col_lista:
             st.subheader("📜 Auditorías Registradas")
-            sesiones = obtener_sesiones()
+            sesiones = obtener_sesiones_permitidas(almacenes_ids)
 
             if not sesiones:
-                st.info("No hay sesiones de inventario registradas.")
+                st.info("No hay sesiones de inventario registradas en tus almacenes autorizados.")
             else:
                 for s in sesiones:
                     s_id = s["sesion_id"]
-                    s_alm_id = s["almacen_id"]
-                    s_alm_nombre = id_a_almacen_map.get(s_alm_id, f"Almacén #{s_alm_id}")
+                    s_alm_nombre = s.get("nombre_almacen", f"Almacén #{s['almacen_id']}")
                     s_obs = s.get("observaciones", "") or "Sin observaciones"
                     s_est = s.get("estado", "ABIERTA")
                     s_creador = s.get("creador", "Admin")
@@ -400,13 +409,13 @@ def render_modulo_sesiones_zonas():
     # TAB 2: GESTIÓN DE ZONAS
     # ----------------------------------------------------
     with tab2:
-        sesiones = obtener_sesiones()
+        sesiones = obtener_sesiones_permitidas(almacenes_ids)
         if not sesiones:
-            st.warning("Primero debes abrir una Sesión de Inventario en la pestaña anterior.")
+            st.warning("Primero debes abrir una Sesión de Inventario en tus almacenes autorizados.")
         else:
             opciones_sesiones = {}
             for s in sesiones:
-                nom_alm = id_a_almacen_map.get(s['almacen_id'], f"Almacén #{s['almacen_id']}")
+                nom_alm = s.get("nombre_almacen", f"Almacén #{s['almacen_id']}")
                 opciones_sesiones[f"Sesión #{s['sesion_id']} - {nom_alm} ({s.get('estado')})"] = s['sesion_id']
 
             sesion_sel_label = st.selectbox("Selecciona la Auditoría activa:", list(opciones_sesiones.keys()))

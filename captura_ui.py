@@ -6,32 +6,69 @@ from database import get_db_connection
 # FUNCIONES DE CONSULTA A BASE DE DATOS
 # ==========================================
 
-def obtener_sesiones_activas():
-    """Recupera sesiones considerando estados vacíos o NULL como válidos."""
+def obtener_almacenes_permitidos():
+    """Obtiene únicamente los almacenes permitidos para el usuario logueado en la sesión."""
+    user_info = st.session_state.get("user_info")
+    if not user_info or "usuario_id" not in user_info:
+        return {}
+
+    usuario_id = user_info["usuario_id"]
+    conn = get_db_connection()
+    if not conn:
+        return {}
+
+    try:
+        with conn.cursor() as cursor:
+            if user_info.get("rol") in ["Admin", "Administrador"]:
+                sql = "SELECT almacen_id, nombre_almacen FROM almacenes ORDER BY nombre_almacen ASC"
+                cursor.execute(sql)
+            else:
+                sql = """
+                    SELECT a.almacen_id, a.nombre_almacen 
+                    FROM almacenes a
+                    INNER JOIN usuario_almacenes ua ON a.almacen_id = ua.almacen_id
+                    WHERE ua.usuario_id = %s
+                    ORDER BY a.nombre_almacen ASC
+                """
+                cursor.execute(sql, (usuario_id,))
+
+            res = cursor.fetchall()
+            return {r["nombre_almacen"]: r["almacen_id"] for r in res}
+    except Exception as e:
+        st.error(f"Error al obtener almacenes permitidos: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
+def obtener_sesiones_activas(almacenes_ids):
+    """Recupera sesiones activas de los almacenes permitidos para el usuario."""
+    if not almacenes_ids:
+        return []
+        
     conn = get_db_connection()
     if not conn:
         return []
     try:
+        format_strings = ','.join(['%s'] * len(almacenes_ids))
         with conn.cursor() as cursor:
-            # Trae sesiones abiertas, en proceso o con estado en blanco/NULL
-            sql = """
-                SELECT sesion_id, estado 
+            # Trae sesiones abiertas o activas de los almacenes permitidos
+            sql = f"""
+                SELECT sesion_id, almacen_id, estado, observaciones 
                 FROM sesiones_inventario 
-                WHERE UPPER(estado) IN ('ABIERTA', 'EN_PROCESO', 'ACTIVA')
+                WHERE (UPPER(estado) IN ('ABIERTA', 'EN_PROCESO', 'ACTIVA')
                    OR estado IS NULL 
-                   OR TRIM(estado) = ''
+                   OR TRIM(estado) = '')
+                   AND almacen_id IN ({format_strings})
                 ORDER BY sesion_id DESC;
             """
-            cursor.execute(sql)
+            cursor.execute(sql, list(almacenes_ids))
             rows = cursor.fetchall()
 
             for r in rows:
-                if "almacen_id" not in r:
-                    r["almacen_id"] = 1
-                # Normaliza la visualización si el estado está en blanco
                 if not r.get("estado") or str(r.get("estado")).strip() == "":
                     r["estado"] = "ABIERTA"
-                if "observaciones" not in r:
+                if "observaciones" not in r or not r.get("observaciones"):
                     r["observaciones"] = "Sesión Activa"
             return rows
     except Exception as e:
@@ -39,7 +76,6 @@ def obtener_sesiones_activas():
         return []
     finally:
         conn.close()
-
 
 
 def obtener_zonas_por_sesion(sesion_id):
@@ -63,8 +99,9 @@ def obtener_zonas_por_sesion(sesion_id):
     finally:
         conn.close()
 
-def buscar_producto_catalogo(termino):
-    """Busca en catalogo_local por código de barras o descripción."""
+
+def buscar_producto_catalogo(termino, almacen_id):
+    """Busca en catalogo_local por código de barras o descripción restringido al almacén."""
     conn = get_db_connection()
     if not conn:
         return []
@@ -72,25 +109,25 @@ def buscar_producto_catalogo(termino):
         with conn.cursor() as cursor:
             term_clean = termino.strip()
             
-            # 1. Búsqueda exacta por Código de Barras (Clave)
+            # 1. Búsqueda exacta por Código de Barras (Clave) en el almacén de la sesión
             sql_exacta = """
                 SELECT * FROM catalogo_local 
-                WHERE codigo_barras = %s 
+                WHERE codigo_barras = %s AND almacen_id = %s
                 LIMIT 1;
             """
-            cursor.execute(sql_exacta, (term_clean,))
+            cursor.execute(sql_exacta, (term_clean, almacen_id))
             exacto = cursor.fetchone()
             if exacto:
                 return [exacto]
 
-            # 2. Búsqueda parcial por Código de Barras o Descripción
+            # 2. Búsqueda parcial por Código de Barras o Descripción dentro del almacén
             sql_like = """
                 SELECT * FROM catalogo_local 
-                WHERE codigo_barras LIKE %s OR descripcion LIKE %s 
+                WHERE almacen_id = %s AND (codigo_barras LIKE %s OR descripcion LIKE %s)
                 LIMIT 15;
             """
             term_like = f"%{term_clean}%"
-            cursor.execute(sql_like, (term_like, term_like))
+            cursor.execute(sql_like, (almacen_id, term_like, term_like))
             return cursor.fetchall()
     except Exception as e:
         st.error(f"Error en catálogo: {e}")
@@ -98,48 +135,47 @@ def buscar_producto_catalogo(termino):
     finally:
         conn.close()
 
+
 def registrar_conteo(sesion_id, zona_id, articulo_id_microsip, codigo_barras, descripcion, cantidad, usuario_id):
-    """Guarda directamente el código de barras y la descripción en lecturas_inventario."""
+    """Guarda la lectura en lecturas_inventario vinculando al usuario actual."""
     conn = get_db_connection()
     if not conn:
         return False
     try:
         with conn.cursor() as cursor:
-            # Insertar los valores reales pasados desde la búsqueda del catálogo
             sql = """
                 INSERT INTO lecturas_inventario 
-                    (sesion_id, zona_id, codigo_barras, descripcion, cantidad)
-                VALUES (%s, %s, %s, %s, %s);
+                    (sesion_id, zona_id, codigo_barras, descripcion, cantidad, usuario_id)
+                VALUES (%s, %s, %s, %s, %s, %s);
             """
             cursor.execute(sql, (
                 sesion_id, 
                 zona_id, 
                 codigo_barras, 
                 descripcion, 
-                cantidad
+                cantidad,
+                usuario_id
             ))
         conn.commit()
         return True
     except Exception as e:
-        # Muestra el error exacto en pantalla si falta alguna columna
         st.error(f"Error al guardar producto ({codigo_barras}): {e}")
         return False
     finally:
         conn.close()
 
+
 def obtener_lecturas_zona(zona_id):
-    """Recupera los conteos de la zona sin hacer JOINs ni depender de Microsip."""
+    """Recupera los conteos de la zona."""
     conn = get_db_connection()
     if not conn:
         return []
     try:
         with conn.cursor() as cursor:
-            # Consulta aislada sin referencias a campos de Microsip
             sql = "SELECT * FROM lecturas_inventario WHERE zona_id = %s ORDER BY lectura_id DESC;"
             cursor.execute(sql, (zona_id,))
             rows = cursor.fetchall()
 
-            # Asegura valores por defecto en Python para la interfaz si faltan columnas en la BD
             for r in rows:
                 if "codigo_barras" not in r or not r["codigo_barras"]:
                     r["codigo_barras"] = "S/C"
@@ -153,7 +189,6 @@ def obtener_lecturas_zona(zona_id):
         return []
     finally:
         conn.close()
-
 
 
 def eliminar_lectura(lectura_id):
@@ -173,6 +208,7 @@ def eliminar_lectura(lectura_id):
     finally:
         conn.close()
 
+
 # ==========================================
 # INTERFAZ OPTIMIZADA PARA CAPTURA (TABLETA / PISTOLA LÁSER)
 # ==========================================
@@ -180,20 +216,32 @@ def eliminar_lectura(lectura_id):
 def render_modulo_captura_inventario():
     st.title("⚡ Captura Dinámica de Inventario")
 
-    # 1. SELECCIÓN DE SESIÓN Y ZONA
-    sesiones = obtener_sesiones_activas()
+    # 1. OBTENER ALMACENES PERMITIDOS Y FILTRAR SESIONES
+    dict_almacenes = obtener_almacenes_permitidos()
+    if not dict_almacenes:
+        st.warning("⚠️ No tienes almacenes permitidos asignados a tu usuario.")
+        return
+
+    almacenes_ids = list(dict_almacenes.values())
+    sesiones = obtener_sesiones_activas(almacenes_ids)
+
     if not sesiones:
-        st.warning("⚠️ No hay auditorías ABIERTAS. Crea o abre una sesión en el módulo correspondiente.")
+        st.warning("⚠️ No hay auditorías ABIERTAS en tus almacenes autorizados.")
         return
 
     col_ses, col_zon = st.columns(2)
     with col_ses:
+        # Muestra el almacén correspondiente a la sesión
+        id_a_nombre = {v: k for k, v in dict_almacenes.items()}
+        
         mapa_sesiones = {
-            f"Sesión #{s['sesion_id']} - Almacén #{s['almacen_id']} ({s.get('observaciones', 'Sin obs')})": s['sesion_id'] 
+            f"Sesión #{s['sesion_id']} - {id_a_nombre.get(s['almacen_id'], f'Almacén #{s['almacen_id']}')} ({s.get('observaciones', 'Sin obs')})": s
             for s in sesiones
         }
-        sesion_sel = st.selectbox("1. Auditoría Activa:", list(mapa_sesiones.keys()))
-        sesion_id_activa = mapa_sesiones[sesion_sel]
+        sesion_sel_label = st.selectbox("1. Auditoría Activa:", list(mapa_sesiones.keys()))
+        sesion_activa = mapa_sesiones[sesion_sel_label]
+        sesion_id_activa = sesion_activa['sesion_id']
+        almacen_id_activo = sesion_activa['almacen_id']
 
     zonas = obtener_zonas_por_sesion(sesion_id_activa)
     if not zonas:
@@ -213,7 +261,6 @@ def render_modulo_captura_inventario():
     user_info = st.session_state.get("user_info", {})
     user_id = user_info.get("usuario_id", 1)
 
-    # Inicializar estados si no existen
     if "producto_seleccionado" not in st.session_state:
         st.session_state["producto_seleccionado"] = None
 
@@ -234,19 +281,16 @@ def render_modulo_captura_inventario():
 
         if submit_busqueda and codigo_escaneado.strip():
             termino = codigo_escaneado.strip()
-            resultados = buscar_producto_catalogo(termino)
+            resultados = buscar_producto_catalogo(termino, almacen_id_activo)
 
             if not resultados:
-                st.error(f"❌ No se encontró ningún producto con: '{termino}'")
+                st.error(f"❌ No se encontró ningún producto con: '{termino}' en el almacén activo.")
             elif len(resultados) == 1:
-                # Coincidencia única: Pasa directo a pedir cantidad
                 st.session_state["producto_seleccionado"] = resultados[0]
                 st.rerun()
             else:
-                # Múltiples coincidencias por nombre
                 st.session_state["scanner_coincidencias"] = resultados
 
-        # Despliegue rápido si hay múltiples resultados por nombre
         if "scanner_coincidencias" in st.session_state and st.session_state["scanner_coincidencias"]:
             st.info("💡 Haz clic en el producto que deseas registrar:")
             for idx, prod in enumerate(st.session_state["scanner_coincidencias"]):
@@ -295,7 +339,6 @@ def render_modulo_captura_inventario():
             if submit_guardar:
                 if registrar_conteo(sesion_id_activa, zona_id_activa, art_microsip, c_barras, desc, cant_ingresada, user_id):
                     st.toast(f"✅ Registradas +{cant_ingresada:,.2f} piezas de {desc}", icon="📦")
-                    # Reinicia para regresar al buscador en automático
                     st.session_state["producto_seleccionado"] = None
                     st.rerun()
 

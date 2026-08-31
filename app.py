@@ -9,6 +9,8 @@ from reportes_ui import render_modulo_comparativa
 from captura_excel_ui import render_modulo_captura_excel
 from captura_ciega_ui import render_modulo_captura_ciega
 from importar_lineas_ui import render_importador_inventario_lineas
+from almacenes import render_abc_almacenes
+
 
 
 st.set_page_config(
@@ -59,9 +61,10 @@ else:
     opciones = []
     if u["rol"] == "Admin":
         opciones = [
-            "Gestión de Usuarios",
-            "Importar Inventario",
-            "📊Importar Inventario de lineas",
+            "👤 Gestión de Usuarios",
+            "🏢 Gestión de Almacenes",
+            "📥 Importar Inventario",
+            "📊 Importar Inventario de líneas",
             "📍 Gestión de Sesiones/Zonas",
             "📲 Captura de Conteo",
             "📲 Captura de Conteo formato Excel",
@@ -70,7 +73,27 @@ else:
             "⚖️ Comparativa: Inventario Teórico vs. Contado",
         ]
     else:
-        opciones = ["Captura de Conteo"]
+        if u["rol"] == "Supervisor":
+                opciones = [
+                    "📥 Importar Inventario",
+                    "📊 Importar Inventario de líneas",
+                    "📍 Gestión de Sesiones/Zonas",
+                    "📲 Captura de Conteo",
+                    "📲 Captura de Conteo formato Excel",
+                    "📲 Captura de Conteo a Ciegas",
+                    "📊 Monitoreo de Inventario en Tiempo Real",
+                    "⚖️ Comparativa: Inventario Teórico vs. Contado",
+                ]
+        else:    
+            if u["rol"] == "Capturista":
+                    opciones = [
+                        "📲 Captura de Conteo",
+                        "📲 Captura de Conteo formato Excel",
+                        "📲 Captura de Conteo a Ciegas",
+                    ]
+
+
+
 
     opcion = st.sidebar.radio("Ir a:", opciones)
 
@@ -79,26 +102,25 @@ else:
         st.session_state["user_info"] = None
         st.rerun()
 
-    # Renders
-    if opcion == "Gestión de Usuarios":
+    # Renders de los Módulos
+    if opcion == "👤 Gestión de Usuarios":
         render_abc_usuarios()
-    elif opcion == "Importar Inventario":
+    elif opcion == "🏢 Gestión de Almacenes":
+        render_abc_almacenes()
+    elif opcion == "📥 Importar Inventario":
         render_importador_inventario()
+    elif opcion == "📊 Importar Inventario de líneas":
+        render_importador_inventario_lineas()
+    elif opcion == "📍 Gestión de Sesiones/Zonas":
+        render_modulo_sesiones_zonas()
     elif opcion == "📲 Captura de Conteo":
         render_modulo_captura_inventario()
     elif opcion == "📲 Captura de Conteo formato Excel":
-            render_modulo_captura_excel()
+        render_modulo_captura_excel()
     elif opcion == "📲 Captura de Conteo a Ciegas":
         render_modulo_captura_ciega()
-
-    elif opcion == "📍 Gestión de Sesiones/Zonas":
-        render_modulo_sesiones_zonas()
     elif opcion == "📊 Monitoreo de Inventario en Tiempo Real":
-            render_modulo_monitoreo()
-
+        render_modulo_monitoreo()
     elif opcion == "⚖️ Comparativa: Inventario Teórico vs. Contado":
         render_modulo_comparativa()
-
-    if opcion == "📊Importar Inventario de lineas":
-        render_importador_inventario_lineas()
     

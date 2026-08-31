@@ -47,3 +47,5 @@ def inicializar_sistema_inventario():
         return False
     finally:
         conn.close()
+
+
