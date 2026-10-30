@@ -1,20 +1,34 @@
 import sys
 import pymysql
 import pymysql.cursors
+import streamlit as st
+
+# Inyectar CSS para ocultar el menú superior y el pie de página
+hide_streamlit_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            </style>
+            """
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 
 #DB_CONFIG = {
 #    "host": "localhost",
 #    "user": "anmirane_admin",
-#    "password": "AndreaMia290913",
+#    "password": "AndreaMia2026+-",
 #    "database": "inventariosanmira",
 #    "port": 3306,
 #}
 DB_CONFIG = {
     "host": "svgr348.serverneubox.com.mx",
-    "user": "anmirane_admin",  # Usuario por defecto
-    "password": "AndreaMiaAnmira",  # Contraseña vacía por defecto en XAMPP
+    "user": "anmirane_admin",
+    "password": "AndreaMia2026+-",
     "database": "anmirane_inventariosanmira",
     "port": 3306,
+    "charset": "utf8mb4",
+    "connect_timeout": 10,
     "cursorclass": pymysql.cursors.DictCursor,
 }
 

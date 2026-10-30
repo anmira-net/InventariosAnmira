@@ -8,15 +8,12 @@ def hash_password(password: str) -> str:
     """Genera un hash seguro usando bcrypt."""
     if not password:
         return ""
+    # Genera la sal y codifica el hash a cadena utf-8
+    pwd_bytes = password.encode('utf-8')
     salt = bcrypt.gensalt()
-    return password
+    return bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
 
 
-def verify_password(password: str, hashed: str) -> bool:
-    """Verifica si la contraseña coincide con el hash almacenado."""
-    if not password or not hashed:
-        return False
-    return password
 
 
 def registrar_bitacora(
@@ -38,10 +35,21 @@ def registrar_bitacora(
         conn.commit()
     finally:
         conn.close()
+def verify_password(password: str, hashed: str) -> bool:
+    """Verifica si la contraseña coincide con hash bcrypt o con texto plano."""
+    if not password or not hashed:
+        return False
+    
+    # 1. Intentar validar con bcrypt
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+    except (ValueError, TypeError):
+        # 2. Fallback: Comparación directa si está en texto plano
+        return password == hashed
 
 
 def autenticar_usuario(usuario_input: str, password_input: str) -> bool:
-    """Valida credenciales contra la BD y actualiza la sesión en Streamlit."""
+    """Valida credenciales contra la BD y encripta el hash si estaba en texto plano."""
     conn = get_db_connection()
     if not conn:
         st.error("No se pudo conectar a la base de datos.")
@@ -64,12 +72,20 @@ def autenticar_usuario(usuario_input: str, password_input: str) -> bool:
 
             if not user["activo"]:
                 st.error("Este usuario se encuentra inactivo.")
-                registrar_bitacora(
-                    user["usuario_id"], False, "Intento en cuenta inactiva"
-                )
+                registrar_bitacora(user["usuario_id"], False, "Intento en cuenta inactiva")
                 return False
 
+            # Validar contraseña
             if verify_password(password_input, user["password_hash"]):
+                # AUTO-MIGRACIÓN: Si la contraseña estaba en texto plano, guardarla como bcrypt
+                if not user["password_hash"].startswith("$2b$") and not user["password_hash"].startswith("$2a$"):
+                    nuevo_hash = hash_password(password_input)
+                    cursor.execute(
+                        "UPDATE usuarios SET password_hash = %s WHERE usuario_id = %s",
+                        (nuevo_hash, user["usuario_id"])
+                    )
+
+                # Registrar último login
                 cursor.execute(
                     "UPDATE usuarios SET ultimo_login = %s WHERE usuario_id = %s",
                     (datetime.datetime.now(), user["usuario_id"]),
@@ -79,20 +95,16 @@ def autenticar_usuario(usuario_input: str, password_input: str) -> bool:
                 st.session_state["logged_in"] = True
                 st.session_state["user_info"] = {
                     "id": user["usuario_id"],
-                    "usuario_id": user["usuario_id"],  # <- Esencial para los filtros
+                    "usuario_id": user["usuario_id"],
                     "nombre": user["nombre_completo"],
                     "usuario": user["usuario"],
                     "rol": user["rol"],
                 }
-                registrar_bitacora(
-                    user["usuario_id"], True, "Inicio de sesión exitoso"
-                )
+                registrar_bitacora(user["usuario_id"], True, "Inicio de sesión exitoso")
                 return True
             else:
                 st.error("Usuario o contraseña incorrectos.")
-                registrar_bitacora(
-                    user["usuario_id"], False, "Contraseña incorrecta"
-                )
+                registrar_bitacora(user["usuario_id"], False, "Contraseña incorrecta")
                 return False
     finally:
         conn.close()
